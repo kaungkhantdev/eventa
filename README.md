@@ -1,33 +1,74 @@
-# .github
+# Eventa
 
-The organization's shared GitHub metadata.
+**Event registration & management for the Thai market.** Attendees discover events
+and book tickets; organizers sell, check people in at the door, and get paid.
 
-> ⚠️ **This repository must be named exactly `.github` on GitHub.** The local
-> folder is called `eventa-.github` only so it is visible next to its siblings
-> instead of hidden by the leading dot. Push it as `.github`:
->
-> ```bash
-> git remote add origin git@github.com:<org>/.github.git
-> ```
+Multi-tenant, bilingual **EN/TH**, money in integer satang, **THB** with 7% VAT,
+times **UTC on the wire and Asia/Bangkok on screen**. Card and **PromptPay**
+payments through Stripe, under **PCI SAQ-A** — no card number ever reaches our
+servers.
 
-## What is in here
+## Repositories
 
-| Path | Effect |
-| --- | --- |
-| `profile/README.md` | Renders on the organization's landing page at `github.com/<org>` |
-| `repo-metadata.md` | The About text and topics for each repo — reference copy, see below |
+| Repository | What it is | Stack |
+| --- | --- | --- |
+| [**eventa-web**](../../eventa-web) | Attendee portal, public event pages, organizer console | React 19 · Vite · Tailwind v4 |
+| [**eventa-api**](../../eventa-api) | All business rules. Owns the database schema and every migration | NestJS 11 · Drizzle · Postgres |
+| [**eventa-relay**](../../eventa-relay) | Publishes the transactional outbox to RabbitMQ | NestJS · amqplib |
+| [**eventa-worker**](../../eventa-worker) | Email, calendar sync, audit, scheduled domain jobs | NestJS · RabbitMQ · SMTP |
+| [**eventa-docs**](../../eventa-docs) | Requirements, architecture, data model, development guide | Markdown |
+| [**eventa-ui-kit**](../../eventa-ui-kit) | Static HTML/Tailwind kit — the visual source of truth | HTML · Tailwind (CDN) |
+| [**eventa-infra**](../../eventa-infra) | Terraform, Helm, Argo CD | Terraform · Helm |
 
-## Why `repo-metadata.md` exists
+## How the pieces fit
 
-A repository's **About** blurb and **topics** live in GitHub's settings, not in
-any file, so they are invisible to code review and easy to let drift. Keeping the
-intended text here means there is one place to check what each repo is supposed
-to say, and one diff to review when it changes.
+```mermaid
+flowchart LR
+    web["eventa-web"]
+    api["eventa-api"]
+    db[("PostgreSQL")]
+    relay["eventa-relay"]
+    mq["RabbitMQ"]
+    worker["eventa-worker"]
 
-Applying it is manual (GitHub UI → the ⚙️ beside **About**), or scripted:
+    web -- HTTP --> api
+    api -- "order + outbox row<br/>(one transaction)" --> db
+    db -- "unpublished rows" --> relay
+    relay --> mq
+    mq --> worker
+    worker -- "email · audit · expiry" --> db
+```
+
+The API never talks to RabbitMQ, and the worker never talks to the API. They meet
+through the database and the broker — so a domain change and the message
+announcing it are written in **one transaction** and can never disagree.
+
+📖 **[How the services connect](../../eventa-docs/blob/main/04-architecture/how-services-connect.md)**
+— the five-minute version, including what breaks when each service stops.
+
+## Running it
 
 ```bash
-gh repo edit <org>/eventa-api \
-  --description "…" \
-  --add-topic nestjs --add-topic drizzle-orm
+docker compose up -d          # in eventa-api: postgres, rabbitmq, mailpit
+cd eventa-api    && pnpm migrate && pnpm seed && pnpm dev
+cd eventa-relay  && pnpm dev   # ← without this, no email is ever sent
+cd eventa-worker && pnpm dev
+cd eventa-web    && pnpm dev
 ```
+
+## Where to start reading
+
+- **New here?** [How the services connect](../../eventa-docs/blob/main/04-architecture/how-services-connect.md)
+- **Building a feature?** [Development guide](../../eventa-docs/blob/main/05-development/development-guide.md)
+- **Changing the schema?** [Entity catalog](../../eventa-docs/blob/main/04-architecture/entities.md) — and it starts in `eventa-api`
+- **Why is it built this way?** [Software architecture + ADRs](../../eventa-docs/blob/main/04-architecture/software-architecture.md)
+
+## House rules
+
+Every repo carries the same non-negotiables in its `AGENTS.md`:
+
+- **PCI SAQ-A** — no card field, ever. Stripe owns the PAN.
+- **Money is integer satang** on the wire, formatted once at the edge. `null` is not `0`.
+- **The API is the source of truth.** Never dual-write.
+- **TDD** — no production rule without a test that required it.
+- **Authorization is server-side.** Hiding a button is tidying, not a control.
