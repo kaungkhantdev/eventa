@@ -12,13 +12,13 @@ servers.
 
 | Repository | What it is | Stack |
 | --- | --- | --- |
-| [**eventa-web**](../../eventa-web) | Attendee portal, public event pages, organizer console | React 19 · Vite · Tailwind v4 |
-| [**eventa-api**](../../eventa-api) | All business rules. Owns the database schema and every migration | NestJS 11 · Drizzle · Postgres |
-| [**eventa-relay**](../../eventa-relay) | Publishes the transactional outbox to RabbitMQ | NestJS · amqplib |
-| [**eventa-worker**](../../eventa-worker) | Email, calendar sync, audit, scheduled domain jobs | NestJS · RabbitMQ · SMTP |
-| [**eventa-docs**](../../eventa-docs) | Requirements, architecture, data model, development guide | Markdown |
-| [**eventa-ui-kit**](../../eventa-ui-kit) | Static HTML/Tailwind kit — the visual source of truth | HTML · Tailwind (CDN) |
-| [**eventa-infra**](../../eventa-infra) | Terraform, Helm, Argo CD | Terraform · Helm |
+| [**eventa-web**](https://github.com/kaungkhantdev/eventa-web) | Attendee portal, public event pages, organizer console | React 19 · Vite · Tailwind v4 |
+| [**eventa-api**](https://github.com/kaungkhantdev/eventa-api) | All business rules. Owns the database schema and every migration | NestJS 11 · Drizzle · Postgres |
+| [**eventa-relay**](https://github.com/kaungkhantdev/eventa-relay) | Publishes the transactional outbox to RabbitMQ | NestJS · amqplib |
+| [**eventa-worker**](https://github.com/kaungkhantdev/eventa-worker) | Email, calendar sync, audit, scheduled domain jobs | NestJS · RabbitMQ · SMTP |
+| [**eventa-docs**](https://github.com/kaungkhantdev/eventa-docs) | Requirements, architecture, data model, development guide | Markdown |
+| [**eventa-ui-kit**](https://github.com/kaungkhantdev/eventa-ui-kit) | Static HTML/Tailwind kit — the visual source of truth | HTML · Tailwind (CDN) |
+| [**eventa-infra**](https://github.com/kaungkhantdev/eventa-infra) | Terraform, Helm, Argo CD | Terraform · Helm |
 
 ## How the pieces fit
 
@@ -43,7 +43,7 @@ The API never talks to RabbitMQ, and the worker never talks to the API. They mee
 through the database and the broker — so a domain change and the message
 announcing it are written in **one transaction** and can never disagree.
 
-📖 **[How the services connect](../../eventa-docs/blob/main/04-architecture/how-services-connect.md)**
+📖 **[How the services connect](https://github.com/kaungkhantdev/eventa-docs/blob/main/04-architecture/how-services-connect.md)**
 — the five-minute version, including what breaks when each service stops.
 
 ## Running it
@@ -58,10 +58,10 @@ cd eventa-web    && pnpm dev
 
 ## Where to start reading
 
-- **New here?** [How the services connect](../../eventa-docs/blob/main/04-architecture/how-services-connect.md)
-- **Building a feature?** [Development guide](../../eventa-docs/blob/main/05-development/development-guide.md)
-- **Changing the schema?** [Entity catalog](../../eventa-docs/blob/main/04-architecture/entities.md) — and it starts in `eventa-api`
-- **Why is it built this way?** [Software architecture + ADRs](../../eventa-docs/blob/main/04-architecture/software-architecture.md)
+- **New here?** [How the services connect](https://github.com/kaungkhantdev/eventa-docs/blob/main/04-architecture/how-services-connect.md)
+- **Building a feature?** [Development guide](https://github.com/kaungkhantdev/eventa-docs/blob/main/05-development/development-guide.md)
+- **Changing the schema?** [Entity catalog](https://github.com/kaungkhantdev/eventa-docs/blob/main/04-architecture/entities.md) — and it starts in `eventa-api`
+- **Why is it built this way?** [Software architecture + ADRs](https://github.com/kaungkhantdev/eventa-docs/blob/main/04-architecture/software-architecture.md)
 
 ## House rules
 
