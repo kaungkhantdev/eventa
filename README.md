@@ -136,9 +136,11 @@ run resumes after the last one that finished.
 Migrations are a one-off run of the **same image**, never part of the api's startup — in the
 cluster it is eventa-infra's pre-deploy Job running that same command. To point either at the
 compose stack's Postgres, add `--network eventa_default` and use `postgres:5432` in
-`DATABASE_URL`. Don't hand it a development `.env` as is: with `NODE_ENV=development` the api's
-and worker's loggers load `pino-pretty`, a devDependency the production image leaves out, and
-the process fails at boot.
+`DATABASE_URL`. Don't hand the api a development `.env` as is: its `NODE_ENV=development` with
+`EMIT_OPENAPI=true` makes the api write `openapi.json` into its working directory at boot, and the
+image's filesystem is read-only to the process, so it fails there. Logs are JSON lines under any
+`NODE_ENV`: the api's and worker's loggers use `pino-pretty` only where it is installed, and the
+production image leaves that devDependency out.
 
 ### Twelve-factor checklist
 
