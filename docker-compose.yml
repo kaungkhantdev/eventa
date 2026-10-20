@@ -12,22 +12,28 @@
 # today. eventa-web is not here: it stays on your machine (`pnpm dev` → :5173)
 # and talks to the api on localhost:3000 exactly as before.
 #
-# Dev only. Production images are eventa-infra's business, not this file's.
+# Every service repo has ONE Dockerfile. This file builds its `dev` stage
+# (`target: dev`); a plain `docker build` of the same file builds its last
+# stage, the production image eventa-infra deploys. Same base image, same
+# lockfile, same Dockerfile — the dev/prod gap is one stage, not a second
+# recipe (README.md, "Production image").
 name: eventa
 
 # Postgres, Redis, RabbitMQ, Mailpit and MinIO, from eventa-api's own compose
 # file, unchanged. Same project name, same volumes (pgdata, miniodata), so the
 # data you already have is the data you get — and `docker compose up -d` in
-# eventa-api still starts just those, as before.
+# eventa-api still starts just those, as before. They are the same kinds of
+# service production uses (Postgres, Redis, RabbitMQ, an SMTP server, the S3
+# API), reached the same way: by a URL or host in the environment.
 include:
   - ../eventa-api/docker-compose.yml
 
 # ─── How the source gets in ─────────────────────────────────────────────────
 #
-# Each image (the repo's Dockerfile.dev) is /app: a node_modules installed FOR
-# LINUX at build time, plus a snapshot of the source. It never shares your
-# Mac's node_modules: the native packages there (argon2, esbuild…) are macOS
-# binaries and would not load in the container.
+# Each image (the `dev` stage of the repo's Dockerfile) is /app: a
+# node_modules installed FOR LINUX at build time, plus a snapshot of the
+# source. It never shares your Mac's node_modules: the native packages there
+# (argon2, esbuild…) are macOS binaries and would not load in the container.
 #
 # Your live source is then bind-mounted over that snapshot, read-only, one
 # path at a time: src/, the manifests, and the few root files the build and
@@ -48,25 +54,27 @@ include:
 # relay's dist/tsconfig.tsbuildinfo (its tsconfig.json is incremental; the api
 # and worker build with incremental off), openapi.json — lands in the
 # container's own layer. Nothing is written into your checkout, your host
-# dist/ is never touched, and a recreated container starts clean.
+# dist/ is never touched, and a recreated container starts clean. (That
+# compiling-at-start is the dev stage's job only: the production stage runs
+# the dist/ its build stage compiled and writes nothing at all.)
 #
 # The price: a top-level file or folder that is not listed below is the
 # image's snapshot, so it only changes when the image is rebuilt — add it here
 # if `pnpm dev` reads it. And root files are mounted one by one, so after
-# editing one (tsconfig, nest-cli.json, drizzle.config.ts), run
-# `docker compose restart <service>` — an editor that saves by replacing the
-# file leaves the old copy mounted until then.
+# editing one (tsconfig, nest-cli.json, drizzle.config.ts), run `docker
+# compose restart <service>` — an editor that saves by replacing the file
+# leaves the old copy mounted until then.
 #
 # package.json, pnpm-lock.yaml and pnpm-workspace.yaml are mounted too, so
 # pnpm checks the image's node_modules against YOUR lockfile before every
-# `pnpm <script>`. After a pull that changes dependencies it stops with
-# ERR_PNPM_VERIFY_DEPS_BEFORE_RUN (the Dockerfiles set
-# verify-deps-before-run=error) instead of running on the old ones. For
-# eventa-api's that is `migrate` failing, and api, relay and worker, which wait
-# on it, never start; for the relay's or the worker's, that service exits. The
-# fix is `docker compose up -d --build`. It does not reach seed: seed builds
-# its own image and sits in an inactive profile, which `up` never builds, so
-# its command carries `--build` (see seed, below).
+# `pnpm <script>` or `pnpm exec`. After a pull that changes dependencies it
+# stops with ERR_PNPM_VERIFY_DEPS_BEFORE_RUN (each Dockerfile's dev stage
+# runs with verify-deps-before-run=error) instead of running on the old ones.
+# For eventa-api's that is `migrate` failing, and api, relay and worker, which
+# wait on it, never start; for the relay's or the worker's, that service
+# exits. The fix is `docker compose up -d --build`. It does not reach seed:
+# seed builds its own image and sits in an inactive profile, which `up` never
+# builds, so its command carries `--build` (see seed, below).
 #
 # Reloading: Docker Desktop for Mac forwards file events on bind mounts, so
 # nest's watcher (TypeScript's) sees a save with no polling configured. If
@@ -78,28 +86,36 @@ include:
 #
 # ─── Environment ────────────────────────────────────────────────────────────
 #
-# Each service reads its repo's own .env, the same file `pnpm dev` reads on
-# your machine (the worker reads the api's too — see there). Only the hosts a
-# container cannot reach are overridden: in there, localhost is the container
-# itself, so Postgres, Redis, RabbitMQ and Mailpit are reached by name.
-# Browser-facing URLs (PUBLIC_WEB_URL, PUBLIC_API_URL, CORS_ORIGINS,
-# S3_ENDPOINT) stay as .env has them, because your browser — not a container —
-# is what follows them. The credentials are the dev ones from
+# Config reaches a container as environment variables and in no other way —
+# the twelve-factor rule, and the way Kubernetes delivers it too. Compose reads
+# each repo's own .env on your machine (the same file `pnpm dev` reads there)
+# and passes its entries in as variables; the worker gets the api's too (see
+# there). No .env is baked into an image — each repo's .dockerignore keeps it
+# out of the build context — and none is mounted into a container: nothing in
+# them needs the file, only the variables.
+#
+# Only the hosts a container cannot reach are overridden: in there, localhost
+# is the container itself, so Postgres, Redis, RabbitMQ and Mailpit are
+# reached by name. Browser-facing URLs (PUBLIC_WEB_URL, PUBLIC_API_URL,
+# CORS_ORIGINS, S3_ENDPOINT) stay as .env has them, because your browser — not
+# a container — is what follows them. The credentials are the dev ones from
 # eventa-api/docker-compose.yml.
 #
-# Compose reads these files when it CREATES a container, and the api, which
-# also reads its mounted .env, lets the environment win over that file. So
-# after editing a .env, `docker compose restart` keeps the old values;
-# `docker compose up -d` sees the change and recreates whatever reads it.
+# Compose reads these files when it CREATES a container. So after editing a
+# .env, `docker compose restart` keeps the old values; `docker compose up -d`
+# sees the change and recreates whatever reads it.
 
-# migrate, api and seed: one Dockerfile (cached, so it builds once), one .env,
-# one set of mounts.
+# migrate, api and seed: one Dockerfile stage (cached, so it builds once), one
+# .env, one set of mounts.
 x-api: &api
   build:
     context: ../eventa-api
-    dockerfile: Dockerfile.dev
+    dockerfile: Dockerfile
+    target: dev
   # tini as PID 1: passes Ctrl-C / `docker compose stop` on to pnpm and reaps
-  # orphaned children, so a stop is quick and leaves nothing behind.
+  # orphaned children, so a stop is quick and leaves nothing behind. (The
+  # production image needs none: node itself is PID 1 there and handles
+  # SIGTERM through Nest's shutdown hooks.)
   init: true
   env_file: ../eventa-api/.env
   environment:
@@ -107,25 +123,24 @@ x-api: &api
     REDIS_URL: redis://redis:6379
     RABBITMQ_URL: amqp://eventa:eventa@rabbitmq:5672
   volumes:
-    - ../eventa-api/src:/app/src:ro
+    - ../eventa-api/src:/app/src:ro # includes src/db/migrations
     - ../eventa-api/package.json:/app/package.json:ro
     - ../eventa-api/pnpm-lock.yaml:/app/pnpm-lock.yaml:ro
     - ../eventa-api/pnpm-workspace.yaml:/app/pnpm-workspace.yaml:ro
     - ../eventa-api/scripts:/app/scripts:ro # pnpm migrate
     - ../eventa-api/assets:/app/assets:ro # the Thai font nest copies into dist
-    - ../eventa-api/drizzle.config.ts:/app/drizzle.config.ts:ro # read by migrate
+    - ../eventa-api/drizzle.config.ts:/app/drizzle.config.ts:ro # pnpm migrate's connection
     - ../eventa-api/nest-cli.json:/app/nest-cli.json:ro
     - ../eventa-api/tsconfig.json:/app/tsconfig.json:ro
     # What nest builds with: src/ only, incremental off.
     - ../eventa-api/tsconfig.build.json:/app/tsconfig.build.json:ro
-    # `pnpm seed` is `tsx --env-file=.env …`, which refuses to run without the
-    # file (the image has none; .dockerignore keeps it out). A variable set in
-    # `environment:` above still wins over it.
-    - ../eventa-api/.env:/app/.env:ro
 
 services:
-  # Applies pending migrations, then exits. Runs on every `up`, so a migration
-  # you just pulled is applied before the api, relay or worker start.
+  # Applies pending migrations, then exits: an admin process, run as a one-off
+  # of the same image as the api. Runs on every `up`, so a migration you just
+  # pulled is applied before the api, relay or worker start. `pnpm migrate`
+  # runs the same code the production image runs as
+  # `node dist/db/migrate.main.js`.
   migrate:
     <<: *api
     command: pnpm migrate
@@ -192,7 +207,8 @@ services:
   relay:
     build:
       context: ../eventa-relay
-      dockerfile: Dockerfile.dev
+      dockerfile: Dockerfile
+      target: dev
     init: true
     env_file: ../eventa-relay/.env
     environment:
@@ -217,7 +233,8 @@ services:
   worker:
     build:
       context: ../eventa-worker
-      dockerfile: Dockerfile.dev
+      dockerfile: Dockerfile
+      target: dev
     init: true
     # The api's .env first, then the worker's own; on a name both set, the
     # LATER file wins, so the worker keeps its own PORT, LOG_LEVEL and the rest.
@@ -271,17 +288,23 @@ services:
       retries: 5
       start_period: 90s
 
-  # Dev data: the `acme` workspace and its admin. Not started by `up`; run it
-  # when you want it (idempotent — it wipes and recreates `acme`):
+  # Dev data: the `acme` workspace and its admin. A one-off admin process, not
+  # started by `up`; run it when you want it (idempotent — it wipes and
+  # recreates `acme`):
   #   docker compose --profile seed run --build --rm seed
   # --build because this image is seed's own (eventa-seed), and `up --build`
   # skips it while the profile is off. `run` alone builds it only when it is
   # missing, so after a dependency change it would run on the old
   # node_modules and stop with ERR_PNPM_VERIFY_DEPS_BEFORE_RUN. With the build
   # cache, the rebuild takes seconds when nothing changed.
+  #
+  # Development data with a known password: it runs from the dev stage, here,
+  # and never against a production database.
   seed:
     <<: *api
     profiles: ['seed']
+    # `pnpm seed` reads a .env only if there is one (--env-file-if-exists);
+    # in here there is none, and DATABASE_URL comes from the environment above.
     command: pnpm seed
     depends_on:
       migrate:

@@ -59,10 +59,13 @@ docker compose --profile seed run --build --rm seed   # once: the acme workspace
 cd ../eventa-web && pnpm dev                          # the web stays on your machine → :5173
 ```
 
-The first `up` builds three dev images, so it takes a few minutes; after that it starts in
-seconds. Every `up` applies pending migrations before anything else starts. The api, relay
-and worker each run `pnpm dev` against your checkout, mounted **read-only** — save a file and
-that service reloads, as it does today, and nothing is ever written into your checkout.
+The first `up` builds the `dev` stage of each service's `Dockerfile`, so it takes a few
+minutes; after that it starts in seconds. Every `up` applies pending migrations before anything
+else starts. The api, relay and worker each run `pnpm dev` against your checkout, mounted
+**read-only** — save a file and that service reloads, as it does today, and nothing is ever
+written into your checkout. Config reaches the containers as environment variables only:
+compose reads each repo's `.env` and passes its entries in; no `.env` is copied into an image
+or mounted into a container.
 
 > **Stop the api, relay and worker you run with `pnpm dev` first.** The containers take
 > ports 3000 and 3100. The relay has no port to collide on, and a second one publishes
@@ -105,6 +108,50 @@ cd eventa-relay  && pnpm dev   # ← without this, no email is ever sent
 cd eventa-worker && pnpm dev
 cd eventa-web    && pnpm dev
 ```
+
+### Production image
+
+Each service repo has **one `Dockerfile`**. Compose builds its `dev` stage; its last stage is
+the production image, so a plain build gives you that:
+
+```bash
+docker build -t eventa-api ../eventa-api       # likewise ../eventa-worker, ../eventa-relay
+```
+
+It holds compiled JavaScript and production dependencies only, runs `node dist/main` as the
+unprivileged `node` user (uid 1000), needs no file to boot and writes nothing to its own
+filesystem. Configure it with environment variables — there is nothing else to configure:
+
+```bash
+# api.env: that environment's KEY=value lines (DATABASE_URL, JWT_SECRET, …, NODE_ENV=production).
+# Docker reads the file literally — no quotes, no `export`.
+docker run --rm --env-file api.env eventa-api node dist/db/migrate.main.js   # migrations, then exit
+docker run --rm --env-file api.env -p 3000:3000 --read-only --tmpfs /tmp eventa-api
+```
+
+Migrations are a one-off run of the **same image**, never part of the api's startup — in the
+cluster it is eventa-infra's pre-deploy Job running that same command. To point either at the
+compose stack's Postgres, add `--network eventa_default` and use `postgres:5432` in
+`DATABASE_URL`. Don't hand it a development `.env` as is: with `NODE_ENV=development` the api's
+and worker's loggers load `pino-pretty`, a devDependency the production image leaves out, and
+the process fails at boot.
+
+### Twelve-factor checklist
+
+| Factor | Where it holds |
+| --- | --- |
+| I. Codebase | One repo per deployable, one `Dockerfile` per repo; every environment runs a build of it. |
+| II. Dependencies | `pnpm install --frozen-lockfile` from the committed lockfile; pnpm pinned by `packageManager` through Corepack; the Node base image pinned by tag; the production stage installs production dependencies only. |
+| III. Config | Environment variables only. `.dockerignore` keeps every `.env*` out of the build context; compose passes variables in, Kubernetes through a ConfigMap and an ExternalSecret. |
+| IV. Backing services | Postgres, Redis, RabbitMQ, SMTP and S3 are attached by URL or host from the environment; MinIO → S3 or Mailpit → a real SMTP relay is a config change, not a code change. |
+| V. Build, release, run | The `build` stage compiles; the image plus an environment's config is the release, promoted by an immutable SHA tag; run is `node dist/main` — nothing compiles at start. |
+| VI. Processes | Stateless: state lives in Postgres, Redis and S3, and nothing is written to the image's filesystem, so it runs with `--read-only` (the cluster sets `readOnlyRootFilesystem`). |
+| VII. Port binding | The api binds `PORT` (3000) and the worker `PORT` (3100, health and metrics); each image `EXPOSE`s it. The relay serves nothing and binds nothing. |
+| VIII. Concurrency | One process type per image; scale by adding replicas. The relay is the exception by design — exactly one (eventa-infra says why). |
+| IX. Disposability | Exec-form `CMD`, so `node` is PID 1 and receives SIGTERM directly; all three services enable Nest's shutdown hooks. |
+| X. Dev/prod parity | Compose's `dev` stage and the production stage share one `Dockerfile`, base image and lockfile, and compose runs the same kinds of backing service production uses. |
+| XI. Logs | Written to stdout as an event stream (pino in the api and worker, Nest's logger in the relay); `docker compose logs` or the cluster's collector routes them. |
+| XII. Admin processes | Migrations: `pnpm migrate` in dev and CI, `node dist/db/migrate.main.js` in the image — one implementation, run as a one-off of the same image. The seed is a one-off of the dev stage, for development data only. |
 
 ## Where to start reading
 
