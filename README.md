@@ -78,9 +78,10 @@ that service reloads, as it does today, and nothing is ever written into your ch
 | RabbitMQ UI | http://localhost:15672 (eventa / eventa) |
 | MinIO console | http://localhost:9001 (minioadmin / minioadmin) |
 
-- **A dependency changed** (`package.json` or the lockfile, say after a pull)? `node_modules`
-  lives in the image, built for Linux, so rebuild: `docker compose up -d --build`. Only the
-  repos that changed rebuild, and their containers start fresh from the new image.
+- **A dependency changed** (`package.json` or the lockfile, say after a pull)? That service
+  stops with `ERR_PNPM_VERIFY_DEPS_BEFORE_RUN`: `node_modules` lives in the image, built for
+  Linux, so rebuild — `docker compose up -d --build`. The install reruns only where the
+  lockfile changed; everything else comes from the build cache.
 - **Edited a root config file** (`tsconfig*.json`, `nest-cli.json`, `drizzle.config.ts`)?
   `docker compose restart api` — or `relay`, `worker`. Only `src/` reloads on its own.
 - **Logs:** `docker compose logs -f api`. **Stop:** `docker compose down` — your data stays

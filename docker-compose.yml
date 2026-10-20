@@ -24,13 +24,14 @@ include:
 
 # ─── How the source gets in ─────────────────────────────────────────────────
 #
-# Each image (the repo's Dockerfile.dev) is /app holding package.json, the
-# lockfile and a node_modules installed FOR LINUX at build time. It is never
-# shared with your Mac's node_modules: the native packages (argon2, esbuild…)
-# there are macOS binaries and would not load in the container.
+# Each image (the repo's Dockerfile.dev) is /app: a node_modules installed FOR
+# LINUX at build time, plus a snapshot of the source. It never shares your
+# Mac's node_modules: the native packages there (argon2, esbuild…) are macOS
+# binaries and would not load in the container.
 #
-# Your source is then bind-mounted INTO that /app, read-only, one path at a
-# time: src/ and the few root files the build and scripts read.
+# Your live source is then bind-mounted over that snapshot, read-only, one
+# path at a time: src/, the manifests, and the few root files the build and
+# scripts read.
 #
 # Why not the whole repo at /app:ro, with volumes over node_modules and dist?
 # Because three things in these repos write under /app, and that layout breaks
@@ -49,11 +50,19 @@ include:
 # container's own layer. Nothing is written into your checkout, your host
 # dist/ is never touched, and a recreated container starts clean.
 #
-# The price: a new top-level file or folder that `pnpm dev` needs has to be
-# added to the list below. And root files are mounted one by one, so after
+# The price: a top-level file or folder that is not listed below is the
+# image's snapshot, so it only changes when the image is rebuilt — add it here
+# if `pnpm dev` reads it. And root files are mounted one by one, so after
 # editing one (tsconfig, nest-cli.json, drizzle.config.ts), run
 # `docker compose restart <service>` — an editor that saves by replacing the
 # file leaves the old copy mounted until then.
+#
+# package.json, pnpm-lock.yaml and pnpm-workspace.yaml are mounted too, so
+# pnpm checks the image's node_modules against YOUR lockfile before every
+# `pnpm <script>`. After a pull that changes dependencies the service stops
+# with ERR_PNPM_VERIFY_DEPS_BEFORE_RUN (the Dockerfiles set
+# verify-deps-before-run=error) instead of running on the old ones; the fix
+# is `docker compose up -d --build`.
 #
 # Reloading: Docker Desktop for Mac forwards file events on bind mounts, so
 # nest's watcher (TypeScript's) sees a save with no polling configured. If
@@ -66,12 +75,13 @@ include:
 # ─── Environment ────────────────────────────────────────────────────────────
 #
 # Each service reads its repo's own .env, the same file `pnpm dev` reads on
-# your machine (the worker reads the api's too — see there). Only the hosts a container cannot reach are overridden: in
-# there, localhost is the container itself, so Postgres, Redis, RabbitMQ and
-# Mailpit are reached by service name. Browser-facing URLs (PUBLIC_WEB_URL,
-# PUBLIC_API_URL, CORS_ORIGINS, S3_ENDPOINT) stay as .env has them, because
-# your browser — not a container — is what follows them. The credentials are
-# the dev ones from eventa-api/docker-compose.yml.
+# your machine (the worker reads the api's too — see there). Only the hosts a
+# container cannot reach are overridden: in there, localhost is the container
+# itself, so Postgres, Redis, RabbitMQ and Mailpit are reached by name.
+# Browser-facing URLs (PUBLIC_WEB_URL, PUBLIC_API_URL, CORS_ORIGINS,
+# S3_ENDPOINT) stay as .env has them, because your browser — not a container —
+# is what follows them. The credentials are the dev ones from
+# eventa-api/docker-compose.yml.
 
 # migrate, api and seed: one Dockerfile (cached, so it builds once), one .env,
 # one set of mounts.
@@ -89,16 +99,19 @@ x-api: &api
     RABBITMQ_URL: amqp://eventa:eventa@rabbitmq:5672
   volumes:
     - ../eventa-api/src:/app/src:ro
+    - ../eventa-api/package.json:/app/package.json:ro
+    - ../eventa-api/pnpm-lock.yaml:/app/pnpm-lock.yaml:ro
+    - ../eventa-api/pnpm-workspace.yaml:/app/pnpm-workspace.yaml:ro
     - ../eventa-api/scripts:/app/scripts:ro # pnpm migrate
     - ../eventa-api/assets:/app/assets:ro # the Thai font nest copies into dist
     - ../eventa-api/drizzle.config.ts:/app/drizzle.config.ts:ro # read by migrate
     - ../eventa-api/nest-cli.json:/app/nest-cli.json:ro
     - ../eventa-api/tsconfig.json:/app/tsconfig.json:ro
-    # Must be here: without it nest falls back to tsconfig.json, which is
-    # incremental and compiles the tests too.
+    # What nest builds with: src/ only, incremental off.
     - ../eventa-api/tsconfig.build.json:/app/tsconfig.build.json:ro
     # `pnpm seed` is `tsx --env-file=.env …`, which refuses to run without the
-    # file. A variable set in `environment:` above still wins over it.
+    # file (the image has none; .dockerignore keeps it out). A variable set in
+    # `environment:` above still wins over it.
     - ../eventa-api/.env:/app/.env:ro
 
 services:
@@ -178,6 +191,9 @@ services:
       RABBITMQ_URL: amqp://eventa:eventa@rabbitmq:5672
     volumes:
       - ../eventa-relay/src:/app/src:ro
+      - ../eventa-relay/package.json:/app/package.json:ro
+      - ../eventa-relay/pnpm-lock.yaml:/app/pnpm-lock.yaml:ro
+      - ../eventa-relay/pnpm-workspace.yaml:/app/pnpm-workspace.yaml:ro
       - ../eventa-relay/nest-cli.json:/app/nest-cli.json:ro
       # The relay has no tsconfig.build.json; nest builds with this one.
       - ../eventa-relay/tsconfig.json:/app/tsconfig.json:ro
@@ -218,6 +234,9 @@ services:
       - '3100:3100'
     volumes:
       - ../eventa-worker/src:/app/src:ro
+      - ../eventa-worker/package.json:/app/package.json:ro
+      - ../eventa-worker/pnpm-lock.yaml:/app/pnpm-lock.yaml:ro
+      - ../eventa-worker/pnpm-workspace.yaml:/app/pnpm-workspace.yaml:ro
       - ../eventa-worker/nest-cli.json:/app/nest-cli.json:ro
       - ../eventa-worker/tsconfig.json:/app/tsconfig.json:ro
       - ../eventa-worker/tsconfig.build.json:/app/tsconfig.build.json:ro
