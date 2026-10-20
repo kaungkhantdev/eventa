@@ -125,9 +125,13 @@ filesystem. Configure it with environment variables — there is nothing else to
 ```bash
 # api.env: that environment's KEY=value lines (DATABASE_URL, JWT_SECRET, …, NODE_ENV=production).
 # Docker reads the file literally — no quotes, no `export`.
-docker run --rm --env-file api.env eventa-api node dist/db/migrate.main.js   # migrations, then exit
+docker run --rm --init --env-file api.env eventa-api node dist/db/migrate.main.js   # migrations, then exit
 docker run --rm --env-file api.env -p 3000:3000 --read-only --tmpfs /tmp eventa-api
 ```
+
+`--init` lets Ctrl-C (or `docker stop`) end a migration run: as PID 1 with no signal handler of its
+own, node would ignore the signal. Stopping is safe — each migration commits on its own, so the next
+run resumes after the last one that finished.
 
 Migrations are a one-off run of the **same image**, never part of the api's startup — in the
 cluster it is eventa-infra's pre-deploy Job running that same command. To point either at the
