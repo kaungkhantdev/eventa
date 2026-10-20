@@ -54,9 +54,9 @@ Check the repos out side by side in one folder — `eventa`, `eventa-api`, `even
 **One command**, from this folder:
 
 ```bash
-docker compose up                             # backing services + migrate + api + relay + worker
-docker compose --profile seed run --rm seed   # once: the acme workspace and its admin
-cd ../eventa-web && pnpm dev                  # the web stays on your machine → :5173
+docker compose up                                     # backing services + migrate + api + relay + worker
+docker compose --profile seed run --build --rm seed   # once: the acme workspace and its admin
+cd ../eventa-web && pnpm dev                          # the web stays on your machine → :5173
 ```
 
 The first `up` builds three dev images, so it takes a few minutes; after that it starts in
@@ -78,12 +78,19 @@ that service reloads, as it does today, and nothing is ever written into your ch
 | RabbitMQ UI | http://localhost:15672 (eventa / eventa) |
 | MinIO console | http://localhost:9001 (minioadmin / minioadmin) |
 
-- **A dependency changed** (`package.json` or the lockfile, say after a pull)? That service
-  stops with `ERR_PNPM_VERIFY_DEPS_BEFORE_RUN`: `node_modules` lives in the image, built for
-  Linux, so rebuild — `docker compose up -d --build`. The install reruns only where the
-  lockfile changed; everything else comes from the build cache.
+- **A dependency changed** (`package.json` or the lockfile, say after a pull)? `node_modules`
+  lives in the image, built for Linux, so pnpm stops with `ERR_PNPM_VERIFY_DEPS_BEFORE_RUN`
+  instead of running on the old one. If it's eventa-api's, `migrate` is what fails
+  (`docker compose logs migrate`) and the api, relay and worker never start; if it's the
+  relay's or the worker's, that service exits. Rebuild — `docker compose up -d --build`. The
+  install reruns only where the lockfile changed; everything else comes from the build cache.
+  The seed has an image of its own that `up` never builds, which is why its command carries
+  `--build`.
 - **Edited a root config file** (`tsconfig*.json`, `nest-cli.json`, `drizzle.config.ts`)?
   `docker compose restart api` — or `relay`, `worker`. Only `src/` reloads on its own.
+- **Changed a `.env`?** `docker compose up -d`. Compose reads env files only when it creates a
+  container, so `restart` keeps the old values; `up -d` sees the change and recreates the
+  api, relay or worker that reads it — the worker reads eventa-api's `.env` too.
 - **Logs:** `docker compose logs -f api`. **Stop:** `docker compose down` — your data stays
   in the `pgdata` and `miniodata` volumes.
 - **The OpenAPI contract** is at http://localhost:3000/api/docs/json. With `EMIT_OPENAPI=true`

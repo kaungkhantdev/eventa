@@ -59,10 +59,14 @@ include:
 #
 # package.json, pnpm-lock.yaml and pnpm-workspace.yaml are mounted too, so
 # pnpm checks the image's node_modules against YOUR lockfile before every
-# `pnpm <script>`. After a pull that changes dependencies the service stops
-# with ERR_PNPM_VERIFY_DEPS_BEFORE_RUN (the Dockerfiles set
-# verify-deps-before-run=error) instead of running on the old ones; the fix
-# is `docker compose up -d --build`.
+# `pnpm <script>`. After a pull that changes dependencies it stops with
+# ERR_PNPM_VERIFY_DEPS_BEFORE_RUN (the Dockerfiles set
+# verify-deps-before-run=error) instead of running on the old ones. For
+# eventa-api's that is `migrate` failing, and api, relay and worker, which wait
+# on it, never start; for the relay's or the worker's, that service exits. The
+# fix is `docker compose up -d --build`. It does not reach seed: seed builds
+# its own image and sits in an inactive profile, which `up` never builds, so
+# its command carries `--build` (see seed, below).
 #
 # Reloading: Docker Desktop for Mac forwards file events on bind mounts, so
 # nest's watcher (TypeScript's) sees a save with no polling configured. If
@@ -82,6 +86,11 @@ include:
 # S3_ENDPOINT) stay as .env has them, because your browser — not a container —
 # is what follows them. The credentials are the dev ones from
 # eventa-api/docker-compose.yml.
+#
+# Compose reads these files when it CREATES a container, and the api, which
+# also reads its mounted .env, lets the environment win over that file. So
+# after editing a .env, `docker compose restart` keeps the old values;
+# `docker compose up -d` sees the change and recreates whatever reads it.
 
 # migrate, api and seed: one Dockerfile (cached, so it builds once), one .env,
 # one set of mounts.
@@ -264,7 +273,12 @@ services:
 
   # Dev data: the `acme` workspace and its admin. Not started by `up`; run it
   # when you want it (idempotent — it wipes and recreates `acme`):
-  #   docker compose --profile seed run --rm seed
+  #   docker compose --profile seed run --build --rm seed
+  # --build because this image is seed's own (eventa-seed), and `up --build`
+  # skips it while the profile is off. `run` alone builds it only when it is
+  # missing, so after a dependency change it would run on the old
+  # node_modules and stop with ERR_PNPM_VERIFY_DEPS_BEFORE_RUN. With the build
+  # cache, the rebuild takes seconds when nothing changed.
   seed:
     <<: *api
     profiles: ['seed']
