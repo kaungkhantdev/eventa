@@ -1,0 +1,255 @@
+# The whole backend in one command, for development: `docker compose up`.
+#
+# Run it from this folder, with the service repos checked out beside it:
+#
+#   eventa/          ← this file
+#   eventa-api/      ← migrate, api, seed — and the backing services
+#   eventa-relay/    ← relay
+#   eventa-worker/   ← worker
+#
+# Each Nest service runs its own `pnpm dev` (nest start --watch) in a container,
+# against the source in your checkout, so a save reloads it the way it does
+# today. eventa-web is not here: it stays on your machine (`pnpm dev` → :5173)
+# and talks to the api on localhost:3000 exactly as before.
+#
+# Dev only. Production images are eventa-infra's business, not this file's.
+name: eventa
+
+# Postgres, Redis, RabbitMQ, Mailpit and MinIO, from eventa-api's own compose
+# file, unchanged. Same project name, same volumes (pgdata, miniodata), so the
+# data you already have is the data you get — and `docker compose up -d` in
+# eventa-api still starts just those, as before.
+include:
+  - ../eventa-api/docker-compose.yml
+
+# ─── How the source gets in ─────────────────────────────────────────────────
+#
+# Each image (the repo's Dockerfile.dev) is /app holding package.json, the
+# lockfile and a node_modules installed FOR LINUX at build time. It is never
+# shared with your Mac's node_modules: the native packages (argon2, esbuild…)
+# there are macOS binaries and would not load in the container.
+#
+# Your source is then bind-mounted INTO that /app, read-only, one path at a
+# time: src/ and the few root files the build and scripts read.
+#
+# Why not the whole repo at /app:ro, with volumes over node_modules and dist?
+# Because three things in these repos write under /app, and that layout breaks
+# each one:
+#   - `nest start` begins by deleting dist/ (deleteOutDir in nest-cli.json).
+#     A volume at /app/dist is a mount point, deleting it fails with EBUSY,
+#     and nest stops before it compiles anything.
+#   - with EMIT_OPENAPI=true the api writes openapi.json into its working
+#     directory at boot; on a read-only /app that is EROFS and the api dies.
+#   - Docker would have to create /app/node_modules and /app/dist as mount
+#     points inside the read-only mount. A fresh clone has neither, and the
+#     container fails to start.
+# Mounted piece by piece instead, everything a process writes — dist/, the
+# relay's dist/tsconfig.tsbuildinfo (its tsconfig.json is incremental; the api
+# and worker build with incremental off), openapi.json — lands in the
+# container's own layer. Nothing is written into your checkout, your host
+# dist/ is never touched, and a recreated container starts clean.
+#
+# The price: a new top-level file or folder that `pnpm dev` needs has to be
+# added to the list below. And root files are mounted one by one, so after
+# editing one (tsconfig, nest-cli.json, drizzle.config.ts), run
+# `docker compose restart <service>` — an editor that saves by replacing the
+# file leaves the old copy mounted until then.
+#
+# Reloading: Docker Desktop for Mac forwards file events on bind mounts, so
+# nest's watcher (TypeScript's) sees a save with no polling configured. If
+# saves ever stop reloading — a different VM, a network drive — add
+#   TSC_WATCHFILE: DynamicPriorityPolling
+#   TSC_WATCHDIRECTORY: RecursiveDirectoryUsingDynamicPriorityPolling
+# to that service's environment. TypeScript reads both; polling costs CPU on
+# every file, every few seconds, which is why it is not on by default.
+#
+# ─── Environment ────────────────────────────────────────────────────────────
+#
+# Each service reads its repo's own .env, the same file `pnpm dev` reads on
+# your machine (the worker reads the api's too — see there). Only the hosts a container cannot reach are overridden: in
+# there, localhost is the container itself, so Postgres, Redis, RabbitMQ and
+# Mailpit are reached by service name. Browser-facing URLs (PUBLIC_WEB_URL,
+# PUBLIC_API_URL, CORS_ORIGINS, S3_ENDPOINT) stay as .env has them, because
+# your browser — not a container — is what follows them. The credentials are
+# the dev ones from eventa-api/docker-compose.yml.
+
+# migrate, api and seed: one Dockerfile (cached, so it builds once), one .env,
+# one set of mounts.
+x-api: &api
+  build:
+    context: ../eventa-api
+    dockerfile: Dockerfile.dev
+  # tini as PID 1: passes Ctrl-C / `docker compose stop` on to pnpm and reaps
+  # orphaned children, so a stop is quick and leaves nothing behind.
+  init: true
+  env_file: ../eventa-api/.env
+  environment:
+    DATABASE_URL: postgres://eventa:eventa@postgres:5432/eventa
+    REDIS_URL: redis://redis:6379
+    RABBITMQ_URL: amqp://eventa:eventa@rabbitmq:5672
+  volumes:
+    - ../eventa-api/src:/app/src:ro
+    - ../eventa-api/scripts:/app/scripts:ro # pnpm migrate
+    - ../eventa-api/assets:/app/assets:ro # the Thai font nest copies into dist
+    - ../eventa-api/drizzle.config.ts:/app/drizzle.config.ts:ro # read by migrate
+    - ../eventa-api/nest-cli.json:/app/nest-cli.json:ro
+    - ../eventa-api/tsconfig.json:/app/tsconfig.json:ro
+    # Must be here: without it nest falls back to tsconfig.json, which is
+    # incremental and compiles the tests too.
+    - ../eventa-api/tsconfig.build.json:/app/tsconfig.build.json:ro
+    # `pnpm seed` is `tsx --env-file=.env …`, which refuses to run without the
+    # file. A variable set in `environment:` above still wins over it.
+    - ../eventa-api/.env:/app/.env:ro
+
+services:
+  # Applies pending migrations, then exits. Runs on every `up`, so a migration
+  # you just pulled is applied before the api, relay or worker start.
+  migrate:
+    <<: *api
+    command: pnpm migrate
+    restart: 'no'
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    <<: *api
+    # S3 from inside a container. The api calls MinIO itself (head, get,
+    # delete) AND presigns the URLs the browser uploads to, all from one
+    # S3_ENDPOINT. SigV4 signs the Host header, so that endpoint has to be the
+    # address your browser uses — http://localhost:9000 — and changing it to
+    # http://minio:9000 would sign URLs no browser can reach.
+    #
+    # So .env keeps localhost:9000, and in this container only, a few lines of
+    # Node listen on 127.0.0.1:9000 and pipe each connection to minio:9000.
+    # The bytes pass through untouched, Host header included, so MinIO checks
+    # the signature against the same host the api signed. No extra package,
+    # and nothing else in the container listens on 9000.
+    command:
+      - sh
+      - -c
+      - |
+        node -e "
+          const net = require('node:net');
+          net
+            .createServer((client) => {
+              const minio = net.connect(9000, 'minio');
+              client.pipe(minio).pipe(client);
+              client.on('error', () => minio.destroy());
+              minio.on('error', () => client.destroy());
+            })
+            .listen(9000, '127.0.0.1');
+        " &
+        exec pnpm dev
+    ports:
+      - '3000:3000'
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    # No curl or wget in the image; Node's own fetch is enough. Liveness only —
+    # /ready checks the dependencies, which depends_on already waited for.
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/api/v1/health/live').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 120s # the first compile, before the first answer
+
+  # Polls the outbox and publishes to RabbitMQ. Exactly ONE may run (see its
+  # main.ts) — stop the one on your machine before starting this.
+  relay:
+    build:
+      context: ../eventa-relay
+      dockerfile: Dockerfile.dev
+    init: true
+    env_file: ../eventa-relay/.env
+    environment:
+      DATABASE_URL: postgres://eventa:eventa@postgres:5432/eventa
+      RABBITMQ_URL: amqp://eventa:eventa@rabbitmq:5672
+    volumes:
+      - ../eventa-relay/src:/app/src:ro
+      - ../eventa-relay/nest-cli.json:/app/nest-cli.json:ro
+      # The relay has no tsconfig.build.json; nest builds with this one.
+      - ../eventa-relay/tsconfig.json:/app/tsconfig.json:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    # No healthcheck: the relay answers no requests, and a failed tick is
+    # logged and retried, not fatal.
+
+  worker:
+    build:
+      context: ../eventa-worker
+      dockerfile: Dockerfile.dev
+    init: true
+    # The api's .env first, then the worker's own; on a name both set, the
+    # LATER file wins, so the worker keeps its own PORT, LOG_LEVEL and the rest.
+    # What it gains from the api's: SECRET_ENCRYPTION_KEY, which it needs to
+    # decrypt the Google refresh token the api encrypted, and CALENDAR_PROVIDER /
+    # GOOGLE_CALENDAR_*, which both services must resolve the same way or the
+    # calendar shows connected on one side and off on the other. Without the
+    # api's file the worker decrypts with its built-in dev key, and once the
+    # api's key differs every calendar sync ends "could not be read". Names the
+    # worker's config does not declare are ignored by it.
+    env_file:
+      - ../eventa-api/.env
+      - ../eventa-worker/.env
+    environment:
+      DATABASE_URL: postgres://eventa:eventa@postgres:5432/eventa
+      REDIS_URL: redis://redis:6379
+      RABBITMQ_URL: amqp://eventa:eventa@rabbitmq:5672
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025 # Mailpit's SMTP port inside the network
+    # Health only (/health/live, /health/ready, /metrics) — the worker's work
+    # comes from RabbitMQ. 3100 is the PORT its .env sets.
+    ports:
+      - '3100:3100'
+    volumes:
+      - ../eventa-worker/src:/app/src:ro
+      - ../eventa-worker/nest-cli.json:/app/nest-cli.json:ro
+      - ../eventa-worker/tsconfig.json:/app/tsconfig.json:ro
+      - ../eventa-worker/tsconfig.build.json:/app/tsconfig.build.json:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mailpit:
+        condition: service_healthy
+    # /health/live answers 503 once the worker has lost its queue for longer
+    # than a broker blip — "consuming", not just "the process is up".
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3100/health/live').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
+
+  # Dev data: the `acme` workspace and its admin. Not started by `up`; run it
+  # when you want it (idempotent — it wipes and recreates `acme`):
+  #   docker compose --profile seed run --rm seed
+  seed:
+    <<: *api
+    profiles: ['seed']
+    command: pnpm seed
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
