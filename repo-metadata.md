@@ -65,13 +65,13 @@ repository lists and search results.
 
 ---
 
-### eventa-infra
+<!-- ### eventa-infra
 
 > Terraform, Helm and Argo CD for deploying Eventa.
 
 `terraform` · `helm` · `argocd` · `kubernetes` · `infrastructure-as-code`
 
----
+--- -->
 
 ## Suggested repository settings
 

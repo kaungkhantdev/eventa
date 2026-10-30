@@ -1,6 +1,6 @@
 # Eventa
 
-**Event registration & management for the Thai market.** Attendees discover events
+**Event registration & management.** Attendees discover events
 and book tickets; organizers sell, check people in at the door, and get paid.
 
 Multi-tenant, bilingual **EN/TH**, money in integer satang, **THB** with 7% VAT,
@@ -19,7 +19,7 @@ servers.
 | [**eventa-docs**](https://github.com/kaungkhantdev/eventa-docs) | Requirements, architecture, data model, development guide | Markdown |
 | [**eventa-ui-kit**](https://github.com/kaungkhantdev/eventa-ui-kit) | Static HTML/Tailwind kit — the visual source of truth | HTML · Tailwind (CDN) |
 | [**eventa-website**](https://github.com/kaungkhantdev/eventa-website) | Public landing page, with real screens captured | HTML · CSS · JS |
-| [**eventa-infra**](https://github.com/kaungkhantdev/eventa-infra) | Cloud Computing & DevOps  | In Progress |
+<!-- | [**eventa-infra**](https://github.com/kaungkhantdev/eventa-infra) | Cloud Computing & DevOps  | In Progress | -->
 
 
 ## How the pieces fit
