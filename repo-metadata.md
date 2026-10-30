@@ -57,6 +57,14 @@ repository lists and search results.
 
 ---
 
+### eventa-website
+
+> Eventa's public landing page. Static HTML, CSS and JavaScript, with real screens from the UI kit.
+
+`html` · `css` · `javascript` · `landing-page` · `static-site` · `event-management`
+
+---
+
 ### eventa-infra
 
 > Terraform, Helm and Argo CD for deploying Eventa.

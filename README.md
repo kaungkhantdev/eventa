@@ -18,7 +18,9 @@ servers.
 | [**eventa-worker**](https://github.com/kaungkhantdev/eventa-worker) | Email, calendar sync, audit, scheduled domain jobs | NestJS · RabbitMQ · SMTP |
 | [**eventa-docs**](https://github.com/kaungkhantdev/eventa-docs) | Requirements, architecture, data model, development guide | Markdown |
 | [**eventa-ui-kit**](https://github.com/kaungkhantdev/eventa-ui-kit) | Static HTML/Tailwind kit — the visual source of truth | HTML · Tailwind (CDN) |
+| [**eventa-website**](https://github.com/kaungkhantdev/eventa-website) | Public landing page, with real screens captured | HTML · CSS · JS |
 | [**eventa-infra**](https://github.com/kaungkhantdev/eventa-infra) | Cloud Computing & DevOps  | In Progress |
+
 
 ## How the pieces fit
 
@@ -49,7 +51,8 @@ announcing it are written in **one transaction** and can never disagree.
 ## Running it
 
 Check the repos out side by side in one folder — `eventa`, `eventa-api`, `eventa-relay`,
-`eventa-worker`, `eventa-web` — each service repo with its `.env`.
+`eventa-worker`, `eventa-web` — each service repo with its `.env`. `eventa-website` needs none
+of this: it is a static page, so open its `index.html`.
 
 **One command**, from this folder:
 
